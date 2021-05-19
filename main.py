@@ -25,8 +25,9 @@ while True:
   response = web_page(temp, humid)
   conn.send('HTTP/1.1 200 OK\n')
   conn.send('Content-Type: text/html\n')
-  conn.send('Connection: close\n\n')
+  conn.send('Connection: close\r\n\r\n')
   conn.sendall(response)
   conn.close()
+
 
 
