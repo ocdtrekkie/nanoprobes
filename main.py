@@ -6,7 +6,7 @@ i2c = I2C(scl=Pin(5), sda=Pin(4))
 gassensor = CCS811.CCS811(i2c)
 
 def web_page(temp, humid, eco2, tvoc):
-  html = """NanoAPI 1 TemperatureC """ + str(temp) + """ HumidityR% """ + str(humid) + """ eCO2ppm """ + str(eco2) + """ tVOCppb """ + str(tvoc)
+  html = """NanoAPI 1 TemperatureC """ + str(temp) + """ HumidityR% """ + str(humid) + """ eCO2ppm """ + str(eco2) + """ TVOCppb """ + str(tvoc)
   return html
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -26,6 +26,7 @@ while True:
   humid = envsensor.humidity()
   eco2 = gassensor.eCO2
   tvoc = gassensor.tVOC
+  print(gassensor)
   response = web_page(temp, humid, eco2, tvoc)
   conn.send('HTTP/1.1 200 OK\r\n')
   conn.send('Content-Type: text/html\r\n')

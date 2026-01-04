@@ -4,6 +4,6 @@ The initial test nanoprobe currently programmed here is a ESP8266-powered Feathe
 
 Most of this project is based on tutorials found at https://randomnerdtutorials.com
 
-CCS811.py was grabbed from https://github.com/stigtsp/CCS811-micropython
+CCS811.py was grabbed from https://github.com/Notthemarsian/CCS811
 
 I used uPyCraft V1.1 to flash the device.
