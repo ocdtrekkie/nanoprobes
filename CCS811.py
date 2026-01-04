@@ -1,102 +1,123 @@
-"""
-ams CCS811 Indoor Air Quality Sensor
-Date:  April 2018
-License: This code is public domain
-Based on CCS811 datasheet. Inspired by Adafruit and Sparkfun libraries
-Tested with Adafruit CCS811 Air quality breakout. Product ID: 3566
-Tested on NodeMCU and Wemos D1 Mini (ESP8266) MicroPython v1.8.7-7-gb5a1a20a3
-and MicroPython v1.9.3-8-g63826ac5c on 2017-11-01; ESP module with ESP8266
+"""Driver for CCS811 sensors (eCO₂ and eTVOC):
+    Adresse i2c: 0x5A or 0x5B depending on status of ADDR pin
+    Official website of the manufacturer: www.sciosense.com
 """
 
-from machine import I2C
+import time
+from micropython import const
 
-class CCS811(object):
-    """CCS811 gas sensor. Measures eCO2 in ppm and TVOC in ppb"""
+__author__ = "Jonathan Fromentin"
+__credits__ = ["Jonathan Fromentin"]
+__license__ = "CeCILL version 2.1"
+__version__ = "1.0.0"
+__maintainer__ = "Jonathan Fromentin"
 
-    def __init__(self, i2c=None, addr=90):
+# import network
+# ap = network.WLAN(network.AP_IF)
+# ap.active(False)
+
+CCS_I2C_ADDR = const(0x5A)  # Default I2C address
+CCS_I2C_ALT_ADDR = const(0x5B)  # Alternate I2C address
+CCS_LM_TH = const(0x05DC)  # Low to Medium Threshold default (1500ppm)
+CCS_MH_TH = const(0x09C4)  # Medium to High Threshold default (2500ppm)
+
+CCS_MODE_0 = const(0x0)  # Idle (Measurements are disabled in this mode)
+CCS_MODE_1 = const(0x1)  # Constant power mode, IAQ measurement every second
+CCS_MODE_2 = const(0x2)  # Pulse heating mode IAQ measurement every 10s
+CCS_MODE_3 = const(0x3)  # Low power pulse heating mode IAQ measurement every 60s
+CCS_MODE_4 = const(0x4)  # Constant power mode, sensor measurement every 250ms
+
+
+class CCS811:
+    """Class based on CCS811 documentation (v3)."""
+
+    def __init__(self, i2c, addr):
+        """Parameters:
+        i2c: instance of machine.I2C
+        addr: i2c address of sensor (default: 0x5A and alternative: 0x5B)"""
+        # Time between power on and the device being ready for new I²C commands
+        time.sleep_ms(20)
+
         self.i2c = i2c
-        self.addr = addr      # 0x5A = 90, 0x5B = 91
-        self.tVOC = 0
-        self.eCO2 = 0
-        self.mode = 1       # Constant power mode; measurement every second
-        self.error = False
+        self.addr = addr
 
         # Check if sensor is vailable at i2c bus address
-        devices = i2c.scan()
-        if self.addr not in devices:
-            raise ValueError('CCS811 not found. Please check wiring. Pull nWake to ground.')
-        # See figure 22 in datasheet: Bootloader Register Map
+        if self.addr not in self.i2c.scan():
+            raise ValueError("CCS811 not found")
+
         # Check HW_ID register (0x20) - correct value 0x81
-        hardware_id = self.i2c.readfrom_mem(self.addr, 0x20, 1)
-        if (hardware_id[0] != 0x81):
-            raise ValueError('Wrong Hardware ID.')
-        # Check Status Register (0x00) to see if valid application present-
-        status = self.i2c.readfrom_mem(self.addr, 0x00, 1)
-        # See figure 12 in datasheet: Status register: Bit 4: App valid
-        if not (status[0] >> 4) & 0x01:
-            raise ValueError('Application not valid.')
-        # Application start. Write with no data to App_Start (0xF4)
-        self.i2c.writeto(self.addr, bytearray([0xF4]))
-        # Set drive mode 1 - see Figure 13 in datasheet: Measure Mode Register (0x01)
-        self.i2c.writeto_mem(self.addr, 0x01, bytearray([0b00011000]))
+        if self.hw_id != 0x81:
+            raise ValueError("Wrong Hardware ID")
 
-    def __str__(self):
-        return 'eCO2: %d ppm, TVOC: %d ppb' % (self.eCO2, self.tVOC)
+        if not self._get_app_is_valid():
+            raise ValueError("Application not valid.")
 
-    def data_ready(self):
-        """returns true if new data was downloaded. Values in .eCO2 and .tVOC"""
-        status = self.i2c.readfrom_mem(self.addr, 0x00, 1)
-        # bit 3 in the status register: data_ready
-        if (status[0] >> 3) & 0x01:
-            # datasheet Figure 14: Algorithm Register Byte Order (0x02)
-            register = self.i2c.readfrom_mem(self.addr, 0x02, 4)
-            co2HB = register[0]
-            co2LB = register[1]
-            tVOCHB = register[2]
-            tVOCLB = register[3]
-            self.eCO2 = ((co2HB << 8) | co2LB)
-            self.tVOC = ((tVOCHB << 8) | tVOCLB)
-            return True
-        else:
-            return False
+    def _get_is_ready_to_measure(self):
+        """False: Firmware is in boot mode, this allows new firmware to be loaded.
+        True: Firmware is in application mode. CCS811 is ready to take ADC measurements.
+        """
+        return self._get_status(0b10000000)
 
-    def get_baseline(self):
-        register = self.i2c.readfrom_mem(self.addr,0x11,2)
-        HB = register[0]
-        LB = register[1]
-        #baseline = (HB << 8) | LB
-        return HB, LB
+    def _get_app_is_valid(self):
+        """False: No application firmware loaded.
+        True: Valid application firmware loaded."""
+        return self._get_status(0b00010000)
 
-    def put_baseline(self,HB,LB):
-        register = bytearray([0x00,0x00])
-        register[0] = HB
-        register[1] = LB
-        self.i2c.writeto_mem(self.addr,0x11,register)
-    
-    def put_envdata(self,humidity,temp):
-        envregister = bytearray([0x00,0x00,0x00,0x00])
-        envregister[0] = int(humidity) << 1
-        t = int(temp//1)
-        tf = temp % 1
-        t_H = (t+25) << 9
-        t_L = int(tf*512)
-        t_comb = t_H | t_L
-        envregister[2] = t_comb >> 8
-        envregister[3] = t_comb & 0xFF
-        self.i2c.writeto_mem(self.addr,0x05,envregister)
-        #return envregister
+    def _get_data_is_ready(self):
+        """False: No new data samples are ready.
+        True: A new data sample is ready."""
+        return self._get_status(0b00001000)
 
+    def _get_status(self, bit):
+        """Return the boolean value for the bit of status."""
+        status = self.i2c.readfrom_mem(self.addr, 0x00, 1)[0]
+        if status & 0b00000001:
+            self._error_id()
+        return bool(status & bit)
 
+    @property
+    def hw_id(self):
+        """Hardware ID. The value is 0x81."""
+        return self.i2c.readfrom_mem(self.addr, 0x20, 1)[0]
 
-"""def main():
-    from machine import Pin, I2C
-    import time
-    i2c = I2C(scl=Pin(5), sda=Pin(4))
-    s = CCS811(i2c)
-    time.sleep(1)
-    while True:
-        if s.data_ready():
-            print('eCO2: %d ppm, TVOC: %d ppb' % (s.eCO2, s.tVOC))
-            time.sleep(1)
+    @property
+    def hw_version(self):
+        """Hardware Version. The value is 0x1X."""
+        return self.i2c.readfrom_mem(self.addr, 0x21, 1)[0]
 
-main()"""
+    @property
+    def fw_boot_version(self):
+        """Firmware Boot Version."""
+        return self._fw_version(0x23)
+
+    @property
+    def fw_app_version(self):
+        """Firmware Application Version."""
+        return self._fw_version(0x24)
+
+    def _fw_version(self, addr_register):
+        """Return the Firmware Boot Version or the Firmware Application Version."""
+        fwv = self.i2c.readfrom_mem(self.addr, addr_register, 2)
+        # Format fo result:  major.minor.trivial
+        return "{}.{}.{}".format(fwv[0] >> 4, fwv[0] & 0xF, fwv[1])
+
+    def _error_id(self):
+        """Raise an exception if an error is identified."""
+        dict_err = {
+            0: "WRITE_REG_INVALID",
+            1: "READ_REG_INVALID",
+            2: "MEASMODE_INVALID",
+            3: "MAX_RESISTANCE",
+            4: "HEATER_FAULT",
+            5: "HEATER_SUPPLY",
+        }
+
+        error_code = self.i2c.readfrom_mem(self.addr, 0xE0, 1)[0]
+        if error_code in dict_err:
+            raise ValueError(dict_err[error_code])
+
+    def _sw_reset(self):
+        """the device will reset and return to BOOT mode."""
+        self.i2c.writeto_mem(self.addr, 0xFF, bytes([0x11, 0xE5, 0x72, 0x8A]))
+        # Time after giving the SW_RESET command and the device being ready for new I²C commands
+        time.sleep_ms(2)
